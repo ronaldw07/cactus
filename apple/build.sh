@@ -1,4 +1,7 @@
-#!/bin/bash -e
+#!/bin/bash
+IOS_MIN_VERSION=16.4
+MACOS_MIN_VERSION=13.3
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -7,6 +10,7 @@ APPLE_DIR="$ROOT_DIR/apple"
 CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE:-Release}
 BUILD_STATIC=${BUILD_STATIC:-true}
 BUILD_XCFRAMEWORK=${BUILD_XCFRAMEWORK:-true}
+CACTUS_CURL_ROOT=${CACTUS_CURL_ROOT:-"$ROOT_DIR/cactus-engine/libs/curl"}
 
 if ! command -v cmake &> /dev/null; then
     echo "Error: cmake not found, please install it"
@@ -26,88 +30,21 @@ echo "Build type: $CMAKE_BUILD_TYPE"
 echo "Using $n_cpu CPU cores"
 echo "Static library: $BUILD_STATIC"
 echo "XCFramework: $BUILD_XCFRAMEWORK"
+echo "Vendored libcurl root: $CACTUS_CURL_ROOT"
 
 function cp_headers() {
     mkdir -p "$ROOT_DIR/apple/$1/$2/cactus.framework/Headers"
-    cp "$ROOT_DIR/cactus/ffi/"*.h "$ROOT_DIR/apple/$1/$2/cactus.framework/Headers/" 2>/dev/null || true
-    cp "$ROOT_DIR/cactus/engine/"*.h "$ROOT_DIR/apple/$1/$2/cactus.framework/Headers/" 2>/dev/null || true
-    cp "$ROOT_DIR/cactus/graph/"*.h "$ROOT_DIR/apple/$1/$2/cactus.framework/Headers/" 2>/dev/null || true
-    cp "$ROOT_DIR/cactus/kernel/"*.h "$ROOT_DIR/apple/$1/$2/cactus.framework/Headers/" 2>/dev/null || true
-    cp "$ROOT_DIR/cactus/"*.h "$ROOT_DIR/apple/$1/$2/cactus.framework/Headers/" 2>/dev/null || true
+    cp "$ROOT_DIR/cactus-engine/cactus_engine.h" "$ROOT_DIR/apple/$1/$2/cactus.framework/Headers/"
+    mkdir -p "$ROOT_DIR/apple/$1/$2/cactus.framework/Modules"
+    cp "$ROOT_DIR/apple/module.modulemap" "$ROOT_DIR/apple/$1/$2/cactus.framework/Modules/"
 }
 
 function create_ios_xcframework_info_plist() {
-    cat > "$ROOT_DIR/apple/cactus-ios.xcframework/Info.plist" << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>AvailableLibraries</key>
-	<array>
-		<dict>
-			<key>LibraryIdentifier</key>
-			<string>ios-arm64</string>
-			<key>LibraryPath</key>
-			<string>cactus.framework</string>
-			<key>SupportedArchitectures</key>
-			<array>
-				<string>arm64</string>
-			</array>
-			<key>SupportedPlatform</key>
-			<string>ios</string>
-		</dict>
-		<dict>
-			<key>LibraryIdentifier</key>
-			<string>ios-arm64-simulator</string>
-			<key>LibraryPath</key>
-			<string>cactus.framework</string>
-			<key>SupportedArchitectures</key>
-			<array>
-				<string>arm64</string>
-			</array>
-			<key>SupportedPlatform</key>
-			<string>ios</string>
-			<key>SupportedPlatformVariant</key>
-			<string>simulator</string>
-		</dict>
-	</array>
-	<key>CFBundlePackageType</key>
-	<string>XFWK</string>
-	<key>XCFrameworkFormatVersion</key>
-	<string>1.0</string>
-</dict>
-</plist>
-EOF
+    cp "$ROOT_DIR/apple/cactus-ios.Info.plist" "$ROOT_DIR/apple/cactus-ios.xcframework/Info.plist"
 }
 
 function create_macos_xcframework_info_plist() {
-    cat > "$ROOT_DIR/apple/cactus-macos.xcframework/Info.plist" << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>AvailableLibraries</key>
-	<array>
-		<dict>
-			<key>LibraryIdentifier</key>
-			<string>macos-arm64</string>
-			<key>LibraryPath</key>
-			<string>cactus.framework</string>
-			<key>SupportedArchitectures</key>
-			<array>
-				<string>arm64</string>
-			</array>
-			<key>SupportedPlatform</key>
-			<string>macos</string>
-		</dict>
-	</array>
-	<key>CFBundlePackageType</key>
-	<string>XFWK</string>
-	<key>XCFrameworkFormatVersion</key>
-	<string>1.0</string>
-</dict>
-</plist>
-EOF
+    cp "$ROOT_DIR/apple/cactus-macos.Info.plist" "$ROOT_DIR/apple/cactus-macos.xcframework/Info.plist"
 }
 
 function build_static_library() {
@@ -124,27 +61,19 @@ function build_static_library() {
 
     cmake -DCMAKE_SYSTEM_NAME=iOS \
           -DCMAKE_OSX_ARCHITECTURES=arm64 \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=$IOS_MIN_VERSION \
           -DCMAKE_OSX_SYSROOT="$IOS_SDK_PATH" \
           -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
           -DBUILD_SHARED_LIBS=OFF \
+          -DCACTUS_CURL_ROOT="$CACTUS_CURL_ROOT" \
           -S "$APPLE_DIR" \
           -B "$BUILD_DIR" >/dev/null
 
     cmake --build "$BUILD_DIR" --config "$CMAKE_BUILD_TYPE" -j "$n_cpu" >/dev/null
 
     mkdir -p "$APPLE_DIR"
-
-    PRO_LIB="$ROOT_DIR/libs/libcactus_pro-ios.a"
-    if [ -f "$PRO_LIB" ]; then
-        echo "Merging libcactus_pro-ios.a into device static library..."
-        libtool -static -o "$APPLE_DIR/libcactus-device.a" "$BUILD_DIR/libcactus.a" "$PRO_LIB"
-    else
-        echo "Note: libcactus_pro-ios.a not found, building without NPU support"
-        cp "$BUILD_DIR/libcactus.a" "$APPLE_DIR/libcactus-device.a"
-    fi
-
-    echo "Device static library built: $APPLE_DIR/libcactus-device.a"
+    cp "$BUILD_DIR/libcactus_engine.a" "$APPLE_DIR/libcactus_engine-device.a"
+    echo "Device static library built: $APPLE_DIR/libcactus_engine-device.a"
     
     echo "Building static library for iOS simulator..."
     BUILD_DIR_SIM="$APPLE_DIR/build-static-simulator"
@@ -159,25 +88,18 @@ function build_static_library() {
 
     cmake -DCMAKE_SYSTEM_NAME=iOS \
           -DCMAKE_OSX_ARCHITECTURES=arm64 \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=$IOS_MIN_VERSION \
           -DCMAKE_OSX_SYSROOT="$IOS_SIM_SDK_PATH" \
           -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
           -DBUILD_SHARED_LIBS=OFF \
+          -DCACTUS_CURL_ROOT="$CACTUS_CURL_ROOT" \
           -S "$APPLE_DIR" \
           -B "$BUILD_DIR_SIM" >/dev/null
 
     cmake --build "$BUILD_DIR_SIM" --config "$CMAKE_BUILD_TYPE" -j "$n_cpu" >/dev/null
 
-    PRO_LIB_SIM="$ROOT_DIR/libs/libcactus_pro-ios-simulator.a"
-    if [ -f "$PRO_LIB_SIM" ]; then
-        echo "Merging libcactus_pro-ios-simulator.a into simulator static library..."
-        libtool -static -o "$APPLE_DIR/libcactus-simulator.a" "$BUILD_DIR_SIM/libcactus.a" "$PRO_LIB_SIM"
-    else
-        echo "Note: libcactus_pro-ios-simulator.a not found, building without NPU support"
-        cp "$BUILD_DIR_SIM/libcactus.a" "$APPLE_DIR/libcactus-simulator.a"
-    fi
-
-    echo "Simulator static library built: $APPLE_DIR/libcactus-simulator.a"
+    cp "$BUILD_DIR_SIM/libcactus_engine.a" "$APPLE_DIR/libcactus_engine-simulator.a"
+    echo "Simulator static library built: $APPLE_DIR/libcactus_engine-simulator.a"
 }
 
 function build_framework() {
@@ -190,9 +112,10 @@ function build_framework() {
         -DCMAKE_SYSTEM_NAME=$1 \
         -DCMAKE_OSX_ARCHITECTURES="$2" \
         -DCMAKE_OSX_SYSROOT=$3 \
-        -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=$([ "$1" = "iOS" ] && echo "$IOS_MIN_VERSION" || echo "$MACOS_MIN_VERSION") \
         -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
         -DBUILD_SHARED_LIBS=ON \
+        -DCACTUS_CURL_ROOT="$CACTUS_CURL_ROOT" \
         -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO \
         -DCMAKE_IOS_INSTALL_COMBINED=YES >/dev/null
 
@@ -285,8 +208,8 @@ echo "Total time: $((t1 - t0)) seconds"
 if [ "$BUILD_STATIC" = "true" ]; then
     rm -rf "$APPLE_DIR/build-static-device" "$APPLE_DIR/build-static-simulator" "$APPLE_DIR/build-static-macos"
     echo "Static libraries:"
-    echo "  Device: $APPLE_DIR/libcactus-device.a"
-    echo "  Simulator: $APPLE_DIR/libcactus-simulator.a"
+    echo "  Device: $APPLE_DIR/libcactus_engine-device.a"
+    echo "  Simulator: $APPLE_DIR/libcactus_engine-simulator.a"
 fi
 
 if [ "$BUILD_XCFRAMEWORK" = "true" ]; then

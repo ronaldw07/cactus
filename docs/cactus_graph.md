@@ -1,3 +1,9 @@
+---
+title: "Cactus Graph API Documentation"
+description: "Computational graph framework for building and executing tensor operations on mobile devices. Supports matrix multiplication, attention, normalization, and INT8/FP16/CQ1-CQ4 precision."
+keywords: ["computation graph", "tensor operations", "mobile AI", "matrix multiplication", "attention mechanism", "INT8", "FP16", "CQ1", "CQ4"]
+---
+
 # Cactus Graph API Documentation
 
 The Cactus Graph API provides a computational graph framework for building and executing tensor operations. It supports multiple precision types, broadcasting, and optimized execution for neural network inference.
@@ -17,7 +23,7 @@ Before using the Cactus Graph API, set up your development environment:
 
 ```bash
 # Setup the environment and install dependencies
-./setup
+source ./setup
 
 # Build the Cactus library
 cactus build
@@ -29,17 +35,21 @@ cactus test
 ## Core Concepts
 
 ### Precision Types
-The framework supports three precision types for tensors:
+The framework supports the following precision types for tensors:
 
 ```cpp
 enum class Precision {
-    INT4,
     INT8,
-    FP16
+    FP16,
+    FP32,
+    CQ1,
+    CQ2,
+    CQ3,
+    CQ4
 };
 ```
 
-**Note:** INT4 tensors use packed storage (2 values per byte) and automatically unpack to INT8 for computation.
+**Note:** CQ1–CQ4 are Cactus custom quantization formats.
 
 ### Graph Construction
 The `CactusGraph` class manages the computational graph:
@@ -57,14 +67,14 @@ For testing, use the provided fixtures that handle memory management:
 
 ```cpp
 TestUtils::Int8TestFixture fixture("My Test");
-TestUtils::FloatTestFixture fixture("Float Test");
+TestUtils::FP16TestFixture fixture("Float Test");
 ```
 
 ## Getting Started
 
 ### Basic Example
 ```cpp
-#include "cactus/graph/graph.h"
+#include "cactus_graph.h"
 
 CactusGraph graph;
 size_t a = graph.input({4}, Precision::INT8);
@@ -106,6 +116,7 @@ size_t exp_result = graph.scalar_exp(input);    // e^input
 size_t sqrt_result = graph.scalar_sqrt(input);  // √input
 size_t cos_result = graph.scalar_cos(input);    // cos(input)
 size_t sin_result = graph.scalar_sin(input);    // sin(input)
+size_t log_result = graph.scalar_log(input);    // ln(input)
 ```
 
 ### Matrix Operations
@@ -178,6 +189,61 @@ size_t rope_output = graph.rope(input, theta, position_offset);
 ```cpp
 size_t silu_out = graph.silu(input);
 size_t gelu_out = graph.gelu(input);
+size_t gelu_erf_out = graph.gelu_erf(input);  // GeLU with erf approximation
+size_t sigmoid_out = graph.sigmoid(input);
+size_t tanh_out = graph.tanh(input);
+size_t relu_out = graph.relu(input);
+size_t glu_out = graph.glu(input, axis);      // Gated Linear Unit
+```
+
+#### Convolution Operations
+
+Each conv has two overloads: with and without bias.
+
+```cpp
+// 1D convolutions (no bias / with bias overloads)
+size_t conv1d_out         = graph.conv1d(input, weight, stride);
+size_t conv1d_with_bias   = graph.conv1d(input, weight, bias, stride);
+size_t conv1d_k3_out      = graph.conv1d_k3(input, weight, stride);
+size_t conv1d_causal      = graph.conv1d_causal(input, weight, kernel_size, dilation);
+size_t conv1d_pointwise   = graph.conv1d_pointwise(input, weight);            // or (input, weight, bias)
+size_t conv1d_depthwise   = graph.conv1d_same_depthwise_k9(input, weight);    // or (input, weight, bias)
+
+// 2D convolutions
+size_t conv2d_out = graph.conv2d_k3s2p1(input, weight);           // or (input, weight, bias)
+size_t conv2d_dw  = graph.conv2d_depthwise_k3s2p1(input, weight); // or (input, weight, bias)
+size_t conv2d_pw  = graph.conv2d_pointwise_1x1(input, weight);    // or (input, weight, bias)
+```
+
+#### Normalization
+```cpp
+size_t groupnorm_out = graph.groupnorm(input, weight, bias, num_groups, epsilon);
+size_t batchnorm_out = graph.batchnorm(input, weight, bias, running_mean, running_var, axis, epsilon);
+```
+
+#### Recurrent & Sequence Operations
+```cpp
+size_t lstm_out = graph.lstm_cell(input, h_prev, c_prev, weight_ih, weight_hh, bias_ih, bias_hh);
+size_t deltanet_out = graph.gated_deltanet_decode(query, key, value, gate_log, beta, initial_state, scale);
+size_t deltanet_prefill = graph.gated_deltanet_prefill(query, key, value, gate_log, beta, initial_state, chunk_size, scale);
+```
+
+#### Mixture of Experts (MoE)
+```cpp
+// Gated SwiGLU MoE: pass three weight sets (w1=gate, w3=up, w2=down)
+size_t moe_gated = graph.moe_layer(hidden, routing_probs, topk_indices,
+    w1_weights, w3_weights, w2_weights,
+    num_experts, num_experts_per_tok, normalize_routing, epsilon, routed_scaling_factor);
+
+// Ungated MoE: pass two weight sets (w1=up, w2=down) and the activation explicitly
+size_t moe_ungated = graph.moe_layer(hidden, routing_probs, topk_indices,
+    w1_weights, w2_weights,
+    num_experts, num_experts_per_tok, normalize_routing, epsilon, routed_scaling_factor, activation);
+```
+
+#### Signal Processing
+```cpp
+size_t stft_out = graph.stft(input, weight, stride, num_fft_bins);
 ```
 
 ### Indexing and Gathering
@@ -206,6 +272,7 @@ size_t weights = graph.mmap_weights("model_weights.bin");
 #### Concatenation
 ```cpp
 size_t concatenated = graph.concat(tensor1, tensor2, axis);
+size_t multi_cat = graph.cat({tensor1, tensor2, tensor3}, axis); // cat multiple tensors
 ```
 
 #### Slicing
@@ -223,9 +290,30 @@ size_t indexed = graph.index(input, index_value, dimension);
 size_t topk_values = graph.topk(input, k);
 ```
 
+#### Persistent Nodes
+```cpp
+size_t persistent = graph.persistent(source_node);  // cache result across executions
+```
+
+#### AltUp Operations
+```cpp
+size_t prediction = graph.altup_predict(coefs, streams, num_streams);
+size_t correction = graph.altup_correct(coefs, innovation, predictions, num_predictions);
+```
+
+#### Bilinear Interpolation
+```cpp
+size_t interpolated = graph.bilinear_interpolation(pos_embeds, dst_height, dst_width);
+```
+
 #### Sampling
 ```cpp
+// Defaults: temperature=0.6, top_p=0.95, top_k=20
 size_t sampled = graph.sample(logits, temperature, top_p, top_k);
+
+// With per-token bias map and repetition penalty / min_p:
+size_t sampled_ext = graph.sample_with_options(
+    logits, temperature, top_p, min_p, repetition_penalty, top_k, /*logit_bias=*/{});
 ```
 
 ## Advanced Features
@@ -251,24 +339,47 @@ size_t result = graph.add(a, b);  // {2,3} -> {2,2,3}
 ```cpp
 size_t int8_tensor = graph.input({4}, Precision::INT8);
 size_t fp16_tensor = graph.precision_cast(int8_tensor, Precision::FP16);
-graph.set_quantization_scale(node_id, scale);
 ```
 
 ### Graph Persistence
+
+#### Saving graphs
+```cpp
+const std::string filename = "test_graph_save_load.cg";
+
+CactusGraph graph;
+size_t input_a = graph.input({2, 3}, Precision::FP16);
+size_t input_b = graph.input({2, 3}, Precision::FP16);
+size_t sum_id = graph.add(input_a, input_b);
+graph.save(filename);
+
+```
+#### Loading Graphs
+```cpp
+CactusGraph loaded = CactusGraph::load(filename);
+std::vector<__fp16> data_a = {1, 2, 3, 4, 5, 6};
+std::vector<__fp16> data_b = {10, 20, 30, 40, 50, 60};
+loaded.set_input(0, data_a.data(), Precision::FP16);
+loaded.set_input(1, data_b.data(), Precision::FP16);
+loaded.execute();
+```
 
 #### Saving Nodes
 ```cpp
 GraphFile::save_node(graph, node_id, "output.bin");
 ```
 
-#### Loading Nodes
+#### GraphFile Namespace
 ```cpp
-CactusGraph new_graph;
-auto loaded = GraphFile::load_into_graph(new_graph, "output.bin");
-size_t node_id = loaded.node_id;
-std::vector<size_t> shape = loaded.shape;
-Precision precision = loaded.precision;
+GraphFile::save_graph(graph, "graph.cactus");
+GraphFile::SerializedGraph serialized = GraphFile::load_graph("graph.cactus");
+CactusGraph loaded = CactusGraph::from_serialized(serialized);
 ```
+
+The `GraphFile` namespace currently exposes `save_graph`, `load_graph`, and
+`save_node`. There is no per-node loader; reload a saved subgraph by
+serializing the parent graph with `save_graph` and reading it back with
+`load_graph`.
 
 ### Graph Management
 
@@ -350,7 +461,7 @@ size_t final_embed = graph.add(embeddings, pos_embed);
 
 ### Similarity Computation
 ```cpp
-TestUtils::FloatTestFixture fixture("Similarity");
+TestUtils::FP16TestFixture fixture("Similarity");
 
 size_t text1 = fixture.create_input({1, 768}, Precision::FP16);
 size_t text2 = fixture.create_input({1, 768}, Precision::FP16);
@@ -369,7 +480,7 @@ size_t similarity = fixture.graph().divide(dot_product, fixture.graph().multiply
 ## Best Practices
 
 ### Memory Management
-1. **Use appropriate precision**: INT4/INT8 for memory efficiency, FP16 for accuracy
+1. **Use appropriate precision**: CQ1-CQ4/INT8 for memory efficiency, FP16 for accuracy
 2. **Memory-map large tensors**: Use `mmap_embeddings()` for vocabulary tables
 3. **Reset graphs**: Call `hard_reset()` when switching between different models
 4. **External buffers**: Use `set_external_input()` to avoid copying large inputs
@@ -378,10 +489,11 @@ size_t similarity = fixture.graph().divide(dot_product, fixture.graph().multiply
 1. **Batch operations**: Process multiple samples together
 2. **Pre-transpose weights**: Use `pretransposed_rhs=true` for matmul when possible
 3. **Fused operations**: The framework automatically fuses compatible operations
-4. **Backend selection**: Use NPU backend for supported operations:
+4. **Backend selection**: Every op accepts a backend (`ComputeBackend::CPU` or `ComputeBackend::METAL`). When omitted, it defaults to `cactus_default_backend()` — auto (best available), or the one forced with `cactus_set_backend("cpu"|"metal")`. Pin a single op:
    ```cpp
-   size_t result = graph.matmul(a, b, false, ComputeBackend::NPU);
+   size_t result = graph.matmul(a, b, false, ComputeBackend::METAL);
    ```
+   Python mirrors this: `g.matmul(a, b, backend=Graph.METAL)`, default `backend=None` follows the global backend.
 
 ### Graph Construction
 1. **Build once, execute many**: Construct the graph once, run with different inputs
@@ -394,6 +506,65 @@ size_t similarity = fixture.graph().divide(dot_product, fixture.graph().multiply
 2. **Verify outputs**: Use `verify_output()` methods for tolerance-based comparison
 3. **Test edge cases**: Include tests for broadcasting, empty tensors, and large inputs
 4. **Check precision**: Test operations with different precision types
+
+### Contributing Graph Operations
+1. **Define the op in core graph types** 
+Add the new OpType in `cactus-graph/cactus_graph.h`
+If the op needs additional parameters, add the fields to OpParams in the same file 
+
+2. **Add a graph builder API**  
+Add a builder method in `cactus-graph/src/builder.cpp` and its declaration in 
+`cactus-graph/cactus_graph.h`
+Follow the pattern of existing builder methods, e.g. for a new "relu" op:
+```cpp
+size_t CactusGraph::relu(size_t input) {
+    return add_node(OpType::RELU, {input}, {});
+}
+```
+3. **Implement the op in the execution engine**
+Implement the kernel or graph op code in the relevant file, usually in `cactus-kernels/src/`
+Register the new op in the dispatch table in `cactus-graph/src/execute.cpp` for the supported backends (CPU, Metal)
+
+4. **Export op in FFI bindings**
+- header: `cactus-graph/cactus_graph.h` (in the `extern "C"` block)
+- implementation: `cactus-graph/src/graph_ffi.cpp`
+
+5. **Add python ctypes declaration** 
+Add `_lib.cactus_graph_my_new_op.argtypes/restype` in `python/cactus/bindings/cactus.py`
+
+6. **Add python graph wrapper** 
+Add `Graph.my_new_op(...)` in `python/cactus/bindings/cactus.py`, and optionally a Tensor
+  convenience method.
+
+7. **Add serialization schema entry if needed**
+If your op has extra parameters that need to be saved/loaded that are not in the 
+default node, add new ParamField enum values. 
+
+If the op has any graph-persistent params:
+
+- add any new ParamField enum values in cactus-graph/src/param_io.cpp
+- add read/write logic for those fields
+- add the op’s schema entry in `op_schema(...)`
+
+If the op has no params, you may not need to touch schema beyond maybe adding an
+empty schema entry.
+
+The syntax pattern there is:
+```
+{OpType::MY_NEW_OP, {
+    {ParamField::Alpha, FieldPersistence::Persistent},
+    {ParamField::Mode, FieldPersistence::Persistent},
+}},
+```
+8. **Add test coverage**
+Add unit tests to `cactus-graph/tests/test_graph.cpp` covering the native graph function, and
+add python tests in `python/tests/test_graph.py` covering the Python API and end-to-end execution.
+
+and then support those fields in `write_field(...)` / `read_field(...)`.
+
+If a field is runtime-only, mark it RuntimeOnly instead of Persistent.
+
+
 
 ### Error Handling
 ```cpp
@@ -411,10 +582,10 @@ try {
 ```cpp
 CactusGraph graph;
 size_t x = graph.input({batch, dim}, Precision::FP16);
-x = graph.linear(x, weight1, bias1);
+x = graph.add(graph.matmul(x, weight1), bias1);
 x = graph.gelu(x);
 x = graph.layernorm(x, ln_weight1, ln_bias1);
-x = graph.linear(x, weight2, bias2);
+x = graph.add(graph.matmul(x, weight2), bias2);
 ```
 
 ### Residual Connections
@@ -433,3 +604,9 @@ path1 = graph.silu(path1);
 size_t path2 = graph.matmul(input, weight2);
 size_t output = graph.multiply(path1, path2);
 ```
+
+## See Also
+
+- [Cactus Engine API](/docs/cactus_engine.md) — High-level inference API built on top of Cactus Graph
+- [Cactus Index API](/docs/cactus_index.md) — On-device vector database for embedding storage and search
+- [Runtime Compatibility](/docs/compatibility.md) — Weight versioning across releases

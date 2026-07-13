@@ -1,32 +1,104 @@
+# Cactus
+
 <img src="assets/banner.jpg" alt="Logo" style="border-radius: 30px; width: 100%;">
 
-Cross-platform & energy-efficient kernels, runtime and AI inference engine for mobile devices. 
+[![Docs][docs-shield]][docs-url]
+[![Website][website-shield]][website-url]
+[![GitHub][github-shield]][github-url]
+[![HuggingFace][hf-shield]][hf-url]
+[![Reddit][reddit-shield]][reddit-url]
+[![Blog][blog-shield]][blog-url]
+
+A hybrid edge-cloud AI engine for mobile devices & wearables.
 
 ```
 ┌─────────────────┐
-│   Cactus FFI    │ ←── OpenAI compatible C API for integration (tools, RAG, cloud handoff)
-└─────────────────┘
+│  Cactus Engine  │ ←── OpenAI-compatible APIs for text, speech, and vision.
+└─────────────────┘     
          │
 ┌─────────────────┐
-│  Cactus Engine  │ ←── High-level transformer engine (NPU support, INT4/INT8/FP16/MIXED)
-└─────────────────┘
+│  Cactus Graph   │ ←── Zero-copy computation graph 
+└─────────────────┘     
          │
 ┌─────────────────┐
-│ Cactus Models   │ ←── Implements SOTA models using Cactus Graphs 
-└─────────────────┘
-         │
-┌─────────────────┐  
-│  Cactus Graph   │ ←── Unified zero-copy computation graph (think NumPy for mobile)
-└─────────────────┘
+│ Cactus Kernels  │ ←── CPU/GPU kernels for (Apple, Samsung, Pixel, etc.)
+└─────────────────┘     
          │
 ┌─────────────────┐
-│ Cactus Kernels  │ ←── Low-level ARM-specific SIMD operations (think CUDA for mobile)
+│ Cactus Quants   │ ←── Custom rotation-based quantization technique 
+└─────────────────┘  
+         │
+┌─────────────────┐
+│Cactus Transpiler│ ←── Transpiles custom PyTorch model to Cactus.
 └─────────────────┘
 ```
 
-# Cactus Graph & Kernel
+## Quick Demo (Mac)
+
+- Step 1: `brew install cactus-compute/cactus/cactus`
+- Step 2: `cactus run`
+
+## Cactus Engine
+
 ```cpp
-#include cactus.h
+#include "cactus_engine.h"
+
+cactus_model_t model = cactus_init(
+    "path/to/weight/folder",
+    "path to txt or dir of txts for auto-rag",
+    false
+);
+
+const char* messages = R"([
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "My name is Henry Ndubuaku"}
+])";
+
+const char* options = R"({
+    "max_tokens": 50,
+    "stop_sequences": ["<|im_end|>"]
+})";
+
+char response[4096];
+int result = cactus_complete(
+    model,            // model handle
+    messages,         // JSON chat messages
+    response,         // response buffer
+    sizeof(response), // buffer size
+    options,          // generation options
+    nullptr,          // tools JSON
+    nullptr,          // streaming callback
+    nullptr,          // user data
+    nullptr,          // pcm audio buffer
+    0                 // pcm buffer size
+);
+```
+Example response from Gemma4-E2B
+```json
+{
+    "success": true,        // generation succeeded
+    "error": null,          // error details if failed
+    "cloud_handoff": false, // true if cloud model used
+    "response": "Hi there!",
+    "function_calls": [],   // parsed tool calls
+    "segments": [],         // transcription segments (empty for chat)
+    "confidence": 0.8193,   // model confidence
+    "confidence_threshold": 0.7, // resolved handoff threshold (model-dependent)
+    "time_to_first_token_ms": 45.23,
+    "total_time_ms": 163.67,
+    "prefill_tps": 1621.89,
+    "decode_tps": 168.42,
+    "ram_usage_mb": 245.67,
+    "prefill_tokens": 28,
+    "decode_tokens": 50,
+    "total_tokens": 78
+}
+```
+
+## Cactus Graph
+
+```cpp
+#include "cactus_graph.h"
 
 CactusGraph graph;
 auto a = graph.input({2, 3}, Precision::FP16);
@@ -46,142 +118,226 @@ graph.execute();
 void* output_data = graph.get_output(result);
 
 graph.hard_reset(); 
-
 ```
 
-# Cactus Engine & FFI
-```cpp
-#include cactus.h
+## Inference Speed
 
-cactus_set_pro_key("");                  // email founders@cactuscompute.com for optional key
+- LLM: Gemma-4-E2B-CQ4 (1k-context prefill / decode for 100 tokens)
+- VLM: Gemma-4-E2B-CQ4 (256px image encode time / decode)
+- Transcribe: Parakeet-TDT-0.6B-CQ4 (20s audio end-to-end transcribe time)
+- 1k-Context RAM: peak MB during the LLM benchmark
+- No speculative decode or MTP, pure decode 
 
-cactus_model_t model = cactus_init(
-    "path/to/weight/folder",             // section to generate weigths below
-    "txt/or/md/file/or/dir/with/many",   // nullptr if none, cactus does automatic fast RAG
-);
+Command: `cactus benchmark` [optional `--ios` or `--android`]
 
-const char* messages = R"([
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "My name is Henry Ndubuaku"}
-])";
+| Device | LLM | VLM | Transcribe | RAM |
+|--------|-----|-----|------------|---------------|
+| Mac M5 Max | 2964tps / 154tps | 0.09s / 168tps | 0.15s | 1348MB |
+| Mac M4 Pro | 1947tps / 97tps | 0.25s / 108tps | 0.28s | 1225MB |
+| Mac M3 Pro | 1294tps / 64tps | 0.40s / 72tps | 0.37s | 735MB |
+| iPad/Vision Pro M5 | 1336tps / 71tps | 0.25s / 80tps | 0.27s | 703MB |
+| iPhone 17 Pro | 729tps / 37tps | 0.5s / 39tps | 0.51s | 644MB |
+| iPhone 15 Pro | 511tps / 25tps | 1.16s / 27tps | 1.40s | 635MB |
 
-const char* options = R"({
-    "max_tokens": 50,
-    "stop_sequences": ["<|im_end|>"]
-})";
+N/B: With 1k-context prefill and decode for 100 runs on M5 Max
+- `LFM2.5-VL-1.6B` = 289toks/sec
+- `Qwen3-1.7B` = 155toks/sec 
+- `LFM2.5-VL-450m` = 472toks/sec, image encodes in 43ms
+- `LFM22.5-VL-230m` = 555toks/sec
 
-char response[4096];
-int result = cactus_complete(
-    model,                               // model handle from cactus_init
-    messages,                            // JSON array of chat messages
-    response,                            // buffer to store response JSON
-    sizeof(response),                    // size of response buffer
-    options,                             // optional: generation options (nullptr for defaults)
-    nullptr,                             // optional: tools JSON for function calling 
-    nullptr,                             // optional: streaming callback fn(token, id, user_data)
-    nullptr                              // optional: user data passed to callback
-);
+## Output Quality 
+
+- Gemma-4-E2B-it accuracy across bit widths, averaged over 3 seeds. 
+- CQ3.26 and CQ2.54 are mixed-precision, CQ2/CQ3/CQ4 are uniformly quantized. 
+- Full results in [docs/cactus_quants.md](/docs/cactus_quants.md):
+
+| Task | F16 (Original) | CQ4 | CQ3.26 | CQ2.54 | CQ2 |
+|-----------|-----|-----|--------|--------|-----|
+| ARC-E | 73.80 | 73.73 | 74.20 | 68.20 | 50.80 |
+| ARC-C | 56.47 | 52.47 | 51.53 | 37.20 | 24.73 |
+| HellaSwag | 46.93 | 47.07 | 45.20 | 40.73 | 35.87 |
+| WinoGrande | 61.00 | 61.13 | 59.60 | 60.13 | 51.27 |
+| MMLU | 62.33 | 59.45 | 57.63 | 47.19 | 33.18 |
+| GPQA | 34.34 | 34.34 | 31.82 | 30.81 | 23.23 |
+| GSM8K | 73.67 | 71.20 | 66.20 | 22.00 | 0.40 |
+| HumanEval | 54.88 | 57.11 | 53.66 | 15.24 | 1.02 |
+| BFCL Simple | 92.00 | 92.42 | 91.50 | 82.25 | 18.75 |
+| BFCL Multi | 89.00 | 88.33 | 89.00 | 52.50 | 13.67 |
+| BFCL Parallel | 84.00 | 83.67 | 82.50 | 30.00 | 3.33 |
+| BFCL Parallel-Multi | 78.00 | 83.33 | 82.00 | 37.00 | 1.33 |
+
+## Supported Models
+
+- Any HuggingFace model can be converted using `cactus convert [HF-Name]`, though experimental. 
+- Liquid, Gemma. whisper. parakeet and Qwen model families are especially tested. 
+- Some models have been pre-uploaded [here](https://huggingface.co/Cactus-Compute), just run `cactus download [HF-Name]`.
+- `cactus run [HF-Name]` albeit first downloads or convert the model if not found. 
+
+## Learn More
+
+| Reference | Language | Description |
+|-----------|----------|-------------|
+| [Cactus Engine](/docs/cactus_engine.md) | C | Chat completion, streaming, tool calling, transcription, embeddings, RAG, vision, vector index, cloud handoff |
+| [Cactus Graph](/docs/cactus_graph.md) | C++ | Tensor operations, matrix multiplication, attention, normalization, activation functions |
+| [Cactus Kernels](/docs/cactus_kernels.md) | C++ | ARM NEON SIMD kernels for matmul, attention, convolution, quantization, DSP, image processing |
+| [Cactus Quants](/docs/cactus_quants.md) | C++ | Rotation-and-codebook quantization from 4-bit to 1-bit for all weight tensors |
+| [Cactus Hybrid](/docs/cactus_hybrid.md) | C/Python | Route hard queries to the cloud automatically based on local model confidence |
+| [Cactus Transpiler](/docs/cactus_transpiler.md) | Python | Convert any PyTorch model to a Cactus runtime graph for on-device inference |
+| [Python Package](/python/) | Python | Python package and CLI |
+
+## Bindings
+
+- [Swift](/bindings/swift/)
+- [Kotlin](/bindings/kotlin/)
+- [Flutter](/bindings/flutter/)
+- [React Native](/bindings/react-native/)
+- [Python](/bindings/python/)
+- [Rust](/bindings/rust/)
+
+## Using this repo
+
 ```
-Example response from Gemma3-270m
-```json
-{
-    "success": true,                    // when successfully generated locally
-    "error": null,                      // returns specific errors if success = false
-    "cloud_handoff": false,             // true when model is unconfident, simply route to cloud
-    "response": "Hi there!",            // null when error is not null or cloud_handoff = true
-    "function_calls": [],               // parsed to [{"name":"set_alarm","arguments":{"hour":"10","minute":"0"}}]
-    "confidence": 0.8193,               // how confident the model is with its response
-    "time_to_first_token_ms": 45.23,    // latency (time to first token)
-    "total_time_ms": 163.67,            // total execution time
-    "prefill_tps": 1621.89,             // prefill tokens per second
-    "decode_tps": 168.42,               // decode tokens per second
-    "ram_usage_mb": 245.67,             // current process RAM usage in MB
-    "prefill_tokens": 28,
-    "decode_tokens": 50,
-    "total_tokens": 78
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                │
+│ Step 0: if on Linux (Ubuntu/Debian)                                            │
+│ sudo apt-get install python3.12 python3.12-venv python3-pip cmake              │
+│   build-essential libcurl4-openssl-dev                                         │
+│                                                                                │
+│ Step 1: clone and setup                                                        │
+│ git clone https://github.com/cactus-compute/cactus && cd cactus                │
+│ source ./setup                                                                 │
+│                                                                                │
+│ Step 2: use the commands                                                       │
+│────────────────────────────────────────────────────────────────────────────────│
+│                                                                                │
+│  cactus auth                         manage cloud API key                      │
+│    --status                          show key status                           │
+│    --clear                           remove saved key                          │
+│                                                                                │
+│  cactus run [model|path]             run a model (downloads if needed)         │
+│    --bits 1|2|3|4|2.54|3.26          CQ quantization (default: 4)              │
+│    --backend cpu|metal               inference backend (default: auto)         │
+│    --image <path>                    image file for VLM inference              │
+│    --audio <path>                    audio file for audio chat                 │
+│    --system <prompt>                 system prompt                             │
+│    --prompt <text>                   send prompt immediately                   │
+│    --thinking                        enable thinking/reasoning mode            │
+│    --token <token>                   HuggingFace token (gated models)          │
+│    --reconvert                       force local rebuild from source           │
+│                                                                                │
+│  cactus transcribe [model]           live microphone transcription with a model│
+│    --file <audio.wav>                audio file to transcribe (WAV)            │
+│    --language <code>                 language code (default: en)               │
+│    --bits 1|2|3|4|2.54|3.26          CQ quantization (default: 4)              │
+│    --token <token>                   HuggingFace token (gated models)          │
+│    --reconvert                       force local rebuild from source           │
+│                                                                                │
+│  cactus download [model]             get a bundle (prebuilt, else build)       │
+│    --bits 1|2|3|4|2.54|3.26          CQ quantization (default: 4)              │
+│    --token <token>                   HuggingFace token (gated models)          │
+│    --reconvert                       force local rebuild from source           │
+│                                                                                │
+│  cactus convert <model> [dir]        HuggingFace -> runnable cactus bundle     │
+│                                      (CQ weights + runtime graph)              │
+│    --bits 1|2|3|4                    CQ quantization (default: 4)              │
+│    --token <token>                   HuggingFace token (gated models)          │
+│    --reconvert                       force local rebuild from source           │
+│    --lora <path>                     merge a LoRA adapter before converting    │
+│    --weights-only                    stop after CQ weights (skip the graph)    │
+│    --artifact-dir <path>             bundle output (default: weights/<model>)  │
+│                                                                                │
+│  cactus serve [model]                OpenAI-compatible local HTTP server       │
+│    --host <addr>                     bind address (default: 127.0.0.1)         │
+│    --port <port>                     port (default: 8080)                      │
+│    --bits 1|2|3|4|2.54|3.26          CQ quantization (default: 4)              │
+│    --backend cpu|metal               inference backend (default: auto)         │
+│    --token <token>                   HuggingFace token (gated models)          │
+│    --reconvert                       force local rebuild from source           │
+│    --no-cloud-handoff                disable automatic cloud handoff           │
+│    --confidence-threshold <0..1>     handoff to cloud below this confidence    │
+│    --cloud-timeout-ms <n>            max wait for cloud handoff                │
+│                                                                                │
+│  cactus code                         run the AI coding agent (TUI / print)     │
+│    --serve-model <id>                auto-start a server with this model       │
+│    --bits 1|2|3|4|2.54|3.26          CQ quantization (default: 4)              │
+│    --backend cpu|metal               inference backend (default: auto)         │
+│    --token <token>                   HuggingFace token (gated models)          │
+│    --reconvert                       force local rebuild from source           │
+│    --host <addr>                     server address (default: 127.0.0.1)       │
+│    --port <port>                     server port (default: 8080)               │
+│    --no-serve                        require a running server (no auto-start)  │
+│    --no-cloud-handoff                disable automatic cloud handoff           │
+│    --confidence-threshold <0..1>     handoff to cloud below this confidence    │
+│    --cloud-timeout-ms <n>            max wait for cloud handoff                │
+│    -- <args...>                      pass remaining args to the agent          │
+│                                                                                │
+│  cactus list                         list downloaded models                    │
+│                                                                                │
+│  cactus build                        build cactus libraries                    │
+│    --apple                           Apple (iOS/macOS)                         │
+│    --android                         Android                                   │
+│    --python                          shared lib for Python FFI                 │
+│                                                                                │
+│  cactus test                         run the test suite                        │
+│    --component <name>                kernels | graph | engine | all            │
+│                                      (default: all)                            │
+│    --model <hf-id>                   default: google/gemma-4-E2B-it            │
+│    --transcription-model <hf-id>     default: nvidia/parakeet-tdt-0.6b-v3      │
+│    --bits 1|2|3|4|2.54|3.26          CQ quantization (default: 4)              │
+│    --backend cpu|metal               inference backend (default: auto)         │
+│    --token <token>                   HuggingFace token (gated models)          │
+│    --reconvert                       force local rebuild of test models        │
+│    --suite <name>                    run a single test suite by name           │
+│                                      (resolved across components,              │
+│                                      e.g. llm → engine)                        │
+│    --list                            list components and suites                │
+│    --ios                             run on connected iPhone                   │
+│    --android                         run on connected Android                  │
+│    --enable-telemetry                send cloud telemetry (off by default)     │
+│                                                                                │
+│  cactus benchmark                    run the engine benchmark suite            │
+│    --model <hf-id>                   default: google/gemma-4-E2B-it            │
+│    --transcription-model <hf-id>     default: nvidia/parakeet-tdt-0.6b-v3      │
+│    --bits 1|2|3|4|2.54|3.26          CQ quantization (default: 4)              │
+│    --backend cpu|metal               inference backend (default: auto)         │
+│    --ios                             run on connected iPhone                   │
+│    --android                         run on connected Android                  │
+│                                                                                │
+│  cactus clean                        delete build artifacts, weights, venv     │
+│  cactus --help                       show this help                            │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Citation 
+
+If you use Cactus in your research, please cite it as follows:
+
+```bibtex
+@software{cactus,
+  title        = {Cactus: AI Inference Engine for Phones & Wearables},
+  author       = {Ndubuaku, Henry and Cactus Team},
+  url          = {https://github.com/cactus-compute/cactus},
+  year         = {2025}
 }
 ```
 
-# Performance
+**N/B:** Scroll all the way up and click the shields link for resources!
 
-- <sub>**Models:** LFM2-VL-450m & Whisper-Small</sub>
-- <sub>**Precision:** Cactus smartly blends INT4, INT8 and F16 for all weights.</sub>
-- <sub>**Decode** = toks/sec, **P/D** = prefill/decode, **VLM** = 256×256 image, **STT** = 30s audio</sub>
-- <sub>**Cactus Pro**: Uses NPU for realtime and large context (Apple for now), scores are marked with *</sub>
+[docs-shield]: https://img.shields.io/badge/Docs-555?style=for-the-badge&logo=readthedocs&logoColor=white
+[docs-url]: https://cactus-compute.github.io/cactus/
 
-| Device | Short Decode | 4k-P/D | VLM-TTFT | VLM-Dec | STT-TTFT | STT-Dec |
-|--------|--------|--------|----------|---------|----------|---------|
-| Mac M4 Pro | 170 | 989/150 | 0.2s/0.1s* | 168 | 1.0s/0.2s* | 92 |
-| Mac M3 Pro | 140 | 890/123 | 0.3s/0.1s* | 149 | 1.5s/0.4s* | 81 |
-| iPad/Mac M4 | 134 | 603/106 | 0.3s/0.1s* | 129 | 1.8s0.3s* | 70 |
-| iPad/Mac M3 | 117 | 525/93 | 0.4s/0.1s* | 111 | 2.8s/0.7s* | 61 |
-| iPhone 17 Pro | 126 | 428/84 | 0.5s/0.1s* | 120 | 3.0s/0.6s* | 80 |
-| iPhone 16 Pro | 106 | 380/81 | 0.6s/0.2s* | 101 | 4.3s/0.7s* | 75 |
-| iPhone 15 Pro | 90 | 330/75 | 0.7s/0.3s* | 92 | 4.5s/0.8s* | 70 |
-| Galaxy S25 Ultra | 80 | 355/52 | 0.7s | 70 | 3.6s/- | 32 |
-| Nothing 3 | 56 | 320/46 | 0.8s | 54 | 4.5s | 55 |
-| Pixel 6a | 25 | 108/24 | 2.3s | 25 | 9.6 | 15 |
-| Raspberry Pi 5 | 20 | 292/18 | 1.7s | 23 | 15s | 16 |
+[website-shield]: https://img.shields.io/badge/Website-555?style=for-the-badge&logo=safari&logoColor=white
+[website-url]: https://cactuscompute.com/
 
+[github-shield]: https://img.shields.io/badge/GitHub-555?style=for-the-badge&logo=github&logoColor=white
+[github-url]: https://github.com/cactus-compute/cactus
 
-# Supported models
+[hf-shield]: https://img.shields.io/badge/HuggingFace-555?style=for-the-badge&logo=huggingface&logoColor=white
+[hf-url]: https://huggingface.co/Cactus-Compute
 
-- <sub>Cactus smartly and compactly blends INT4, INT8 and F16 for all weights.</sub>
-- <sub>You could still quantize everything with one precision, but mixed is optimal</sub>
+[reddit-shield]: https://img.shields.io/badge/Reddit-555?style=for-the-badge&logo=reddit&logoColor=white
+[reddit-url]: https://www.reddit.com/r/cactuscompute/
 
-| Model | Zipped Size | Completion | Tools | Vision | Embed | Speech | Pro |
-|-------|------------------|------------|-------|--------|-------|--------|-----|
-| google/gemma-3-270m-it | 252MB | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| google/functiongemma-270m-it | 252MB | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
-| openai/whisper-small | 283MB | ✗ | ✗ | ✗ | ✓ | ✓ | Apple |
-| LiquidAI/LFM2-350M | 244MB | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ |
-| LiquidAI/LFM2-VL-450M | 448MB | ✓ | ✗ | ✓ | ✓ | ✗ | Apple |
-| nomic-ai/nomic-embed-text-v2-moe | 451MB | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
-| Qwen/Qwen3-0.6B | 514MB | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ |
-| Qwen/Qwen3-Embedding-0.6B | 514MB | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
-| LiquidAI/LFM2-700M | 498MB | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ |
-| google/gemma-3-1b-it | 642MB | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| LiquidAI/LFM2.5-1.2B-Instruct | 474MB | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ |
-| LiquidAI/LFM2-1.2B-RAG | 474MB | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ |
-| LiquidAI/LFM2-1.2B-Tool | 474MB | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ |
-| openai/whisper-medium | 658MB | ✗ | ✗ | ✗ | ✓ | ✓ | Apple |
-| LiquidAI/LFM2.5-VL-1.6B | 954MB | ✓ | ✗ | ✓ | ✓ | ✗ | Apple |
-| Qwen/Qwen3-1.7B | 749MB | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ |
-
-# Using this repo on a Mac
-
-```bash
-git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setup
-```
-
-- <sub> `[model]` is a HuggingFace name from the table above (default: `google/gemma-3-270m-it`)</sub>
-- <sub> Common flags: `--precision INT4|INT8|FP16` (default: INT4), `--token <hf_token>`</sub>
-- <sub>Always run `source ./setup` in any new terminal.</sub>
-
-| Command | Description |
-|---------|-------------|
-| `cactus run [model]` | Opens playground (auto downloads model) |
-| `cactus download [model]` | Downloads model to `./weights` |
-| `cactus convert [model] [dir]` | Converts model, supports LoRA merging (`--lora <path>`) |
-| `cactus build` | Builds for ARM (`--apple` or `--android`) |
-| `cactus test` | Runs tests (`--ios` / `--android`, `--model [name/path]`) |
-| `cactus clean` | Removes build artifacts |
-| `cactus --help` | Shows all commands and flags |
-
-# Using in your apps 
-
-- [Python for Mac](/python/)
-- [React Native SDK](https://github.com/cactus-compute/cactus-react-native)
-- [Swift Multiplatform SDK](https://github.com/mhayes853/swift-cactus)
-- [Kotlin Multiplatform SDK](https://github.com/cactus-compute/cactus-kotlin)
-- [Flutter SDK](https://github.com/cactus-compute/cactus-flutter)
-- [Rust SDK](https://github.com/mrsarac/cactus-rs)
-
-# Try demo apps 
-
-- [iOS Demo](https://apps.apple.com/gb/app/cactus-chat/id6744444212)
-- [Android Demo](https://play.google.com/store/apps/details?id=com.rshemetsubuser.myapp)
-
-# Maintaining Organisations
-1. [Cactus Compute, Inc](https://cactuscompute.com/) 
-2. [UCLA's BruinAI](https://bruinai.org/) 
+[blog-shield]: https://img.shields.io/badge/Blog-555?style=for-the-badge&logo=hashnode&logoColor=white
+[blog-url]: https://cactuscompute.com/blog
